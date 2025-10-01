@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mood → Music Suggester 🎧</title>
+  <style>
+    :root{
+      --bg:#0f1222; --card:#151936; --muted:#8a93b2; --text:#e7ecff;
+      --accent:#6ea8ff; --accent2:#a68cff; --ok:#52d1a5; --err:#ff6b6b;
+      --ring: 0 0 0 3px rgba(110,168,255,.25);
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; min-height:100vh; display:grid; place-items:center;
+      background: radial-gradient(1200px 800px at 70% -10%, #1a1f47 0%, #0f1222 40%, #0f1222 100%);
+      color:var(--text); font:16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    }
+    .wrap{width:min(680px, 92vw); padding:32px}
+    .card{
+      background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:20px; padding:28px; box-shadow: 0 10px 40px rgba(0,0,0,.35);
+      backdrop-filter: blur(6px);
+    }
+    h1{margin:0 0 10px; font-size: clamp(22px, 4vw, 30px)}
+    p.lead{margin:0 0 22px; color:var(--muted)}
+    .row{display:flex; gap:12px; align-items:center; margin-top:10px}
+    input[type="text"]{
+      flex:1; padding:14px 16px; border-radius:12px; outline:0; border:1px solid rgba(255,255,255,.12);
+      background:#0f1330; color:var(--text);
+      transition:border .15s, box-shadow .15s, transform .05s;
+    }
+    input[type="text"]:focus{ box-shadow: var(--ring); border-color: rgba(110,168,255,.6) }
+    button{
+      padding:12px 16px; border:0; border-radius:12px; color:#0b1024; background:linear-gradient(180deg,var(--accent),#4d86ff);
+      font-weight:700; cursor:pointer; transition: transform .04s, opacity .2s, box-shadow .2s;
+      box-shadow: 0 6px 20px rgba(77,134,255,.35);
+    }
+    button:hover{ transform: translateY(-1px) }
+    button:active{ transform: translateY(1px) }
+    button[disabled]{opacity:.6; cursor:not-allowed}
+    .hint{font-size:13px; color:var(--muted); margin-top:8px}
+    .result{
+      margin-top:18px; padding:18px; border-radius:14px;
+      background: rgba(82, 209, 165, .09); border:1px solid rgba(82,209,165,.25);
+      display:none;
+    }
+    .result.show{display:block}
+    .rec-text{white-space:pre-wrap}
+    .btns{display:flex; gap:10px; margin-top:12px; flex-wrap:wrap}
+    .btn-outline{
+      background:transparent; border:1px solid rgba(255,255,255,.18); color:var(--text); padding:8px 14px; border-radius:10px; cursor:pointer;
+      text-decoration:none;
+    }
+    .err{margin-top:16px; color:var(--err); display:none}
+    .err.show{display:block}
+    .spinner{
+      width:18px; height:18px; border-radius:50%; border:3px solid rgba(255,255,255,.15); border-top-color:#fff;
+      animation: spin .9s linear infinite; display:none; margin-left:8px
+    }
+    .loading .spinner{display:inline-block}
+    @keyframes spin{to{transform: rotate(360deg)}}
+    footer{margin-top:18px; text-align:center; color:var(--muted); font-size:12px}
+    .pill{background: rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.12); padding:4px 10px; border-radius:999px; font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>🎧 Mood → Music Suggester</h1>
+      <p class="lead">Tell me how you feel (e.g., “sleepy”, “heartbroken”, “need hype for the gym”) and I’ll suggest a song.</p>
+
+      <form id="form" class="row" autocomplete="off">
+        <input id="mood" type="text" name="mood" placeholder="How are you feeling?" required minlength="2" />
+        <button id="go" type="submit">Get Song</button>
+        <span class="spinner" aria-hidden="true"></span>
+      </form>
+      <div class="hint">Tip: The more specific the mood, the better the song recommendation. <span class="pill">lyrics-friendly</span></div>
+
+      <div id="result" class="result">
+        <div class="rec-text" id="recText"></div>
+        <div class="btns">
+          <a id="listen" class="btn-outline" target="_blank" rel="noopener noreferrer">🎧 Listen on Spotify</a>
+          <button id="copy" class="btn-outline" type="button">Copy link</button>
+        </div>
+      </div>
+
+      <div id="err" class="err"></div>
+      <footer>Powered by n8n + Spotify + OpenAI</footer>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('form');
+    const moodEl = document.getElementById('mood');
+    const goBtn = document.getElementById('go');
+    const result = document.getElementById('result');
+    const recText = document.getElementById('recText');
+    const listen = document.getElementById('listen');
+    const copyBtn = document.getElementById('copy');
+    const errBox = document.getElementById('err');
+
+    const ENDPOINT = "https://correct-walrus-happily.ngrok-free.app/webhook/music-suggester";
+
+    async function fetchSong(mood){
+      const res = await fetch(ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mood }) // sends { "mood": ... }
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      return res.json();
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const mood = moodEl.value.trim();
+      if (!mood) return;
+
+      document.body.classList.add('loading');
+      goBtn.disabled = true; errBox.classList.remove('show'); errBox.textContent = '';
+
+      try {
+        const data = await fetchSong(mood);
+
+        // Show recommendation text
+        recText.textContent = data.recommendation || "Here’s a tune for you 🎶";
+
+        // Extract Spotify URL (either from data.url if it exists, or from inside the recommendation text)
+        const urlMatch = (data.url && data.url.startsWith("http"))
+          ? data.url
+          : (data.recommendation.match(/https?:\/\/open\.spotify\.com\/\S+/)?.[0] || null);
+
+        if (urlMatch) {
+          listen.href = urlMatch;
+          listen.style.display = "inline-flex";
+          copyBtn.onclick = async () => {
+            try {
+              await navigator.clipboard.writeText(urlMatch);
+              copyBtn.textContent = "Copied!";
+              setTimeout(()=> copyBtn.textContent = "Copy link", 1200);
+            } catch { /* ignore */ }
+          };
+        } else {
+          listen.style.display = "none";
+        }
+
+        result.classList.add('show');
+      } catch (err) {
+        errBox.textContent = err.message?.slice(0, 200) || "Something went wrong. Please try again.";
+        errBox.classList.add('show');
+        result.classList.remove('show');
+      } finally {
+        document.body.classList.remove('loading');
+        goBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
+
